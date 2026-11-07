@@ -33,6 +33,7 @@ Usage:
   james list                               active grants
   james revoke PROFILE | --all
   james profiles                           profiles in ` + "~/.config/james/config.yaml" + `
+  james skill-install [--dir DIR]          install the agent skill (default ~/.claude/skills)
   james daemon                             run the daemon in the foreground
 `
 
@@ -55,6 +56,8 @@ func main() {
 		err = profiles()
 	case "daemon":
 		err = daemon.Run(version)
+	case "skill-install":
+		err = skillInstall(args)
 	case "version":
 		fmt.Println(version)
 	case "-h", "--help", "help":

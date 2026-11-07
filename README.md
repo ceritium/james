@@ -10,6 +10,7 @@ macOS on Apple Silicon only. Requires the 1Password desktop app with **Settings 
 
 ```sh
 go build -o ~/.local/bin/james ./cmd/james
+james skill-install   # teaches Claude Code to use james; --dir for other agents
 ```
 
 ## Configure
