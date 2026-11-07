@@ -1,0 +1,97 @@
+package daemon
+
+import (
+	"sort"
+	"sync"
+	"time"
+
+	"github.com/ceritium/james/internal/peer"
+)
+
+// A grant lets processes under one agent process use a profile until it expires.
+type grant struct {
+	profile string
+	anchor  peer.Proc
+	granted time.Time
+	expires time.Time
+	uses    int
+}
+
+type grantKey struct {
+	profile string
+	pid     int
+	startUS uint64
+}
+
+type grants struct {
+	mu    sync.Mutex
+	m     map[grantKey]*grant
+	now   func() time.Time
+	alive func(peer.Proc) bool
+}
+
+func newGrants(now func() time.Time, alive func(peer.Proc) bool) *grants {
+	return &grants{m: map[grantKey]*grant{}, now: now, alive: alive}
+}
+
+func key(profile string, anchor peer.Proc) grantKey {
+	return grantKey{profile: profile, pid: anchor.PID, startUS: anchor.StartUS}
+}
+
+// use returns a live grant and counts the use; ok is false if none applies.
+func (g *grants) use(profile string, anchor peer.Proc) (grant, bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.pruneLocked()
+	gr, ok := g.m[key(profile, anchor)]
+	if !ok {
+		return grant{}, false
+	}
+	gr.uses++
+	return *gr, true
+}
+
+func (g *grants) add(profile string, anchor peer.Proc, ttl time.Duration) grant {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	now := g.now()
+	gr := &grant{profile: profile, anchor: anchor, granted: now, expires: now.Add(ttl)}
+	g.m[key(profile, anchor)] = gr
+	return *gr
+}
+
+func (g *grants) list() []grant {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.pruneLocked()
+	out := make([]grant, 0, len(g.m))
+	for _, gr := range g.m {
+		out = append(out, *gr)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].expires.Before(out[j].expires) })
+	return out
+}
+
+// revoke removes grants for profile, or all grants when profile is empty.
+func (g *grants) revoke(profile string) int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	n := 0
+	for k := range g.m {
+		if profile == "" || k.profile == profile {
+			delete(g.m, k)
+			n++
+		}
+	}
+	return n
+}
+
+// Grants end when they expire or when their agent process exits.
+func (g *grants) pruneLocked() {
+	now := g.now()
+	for k, gr := range g.m {
+		if !now.Before(gr.expires) || !g.alive(gr.anchor) {
+			delete(g.m, k)
+		}
+	}
+}
