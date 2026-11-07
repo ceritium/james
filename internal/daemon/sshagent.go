@@ -62,6 +62,8 @@ func (a *sshAgent) keys() ([]keyEntry, error) {
 	for _, gr := range a.s.grants.forChain(a.chain) {
 		signers, err := a.s.grants.signers(gr, a.s.loadSigners)
 		if err != nil {
+			_ = a.s.d.Audit.Write(audit.Event{Event: "error", Profile: gr.profile, Anchor: gr.anchor.String(),
+				PeerPID: a.pid, Command: chainNames(a.chain), Error: "load ssh keys: " + err.Error()})
 			return nil, fmt.Errorf("profile %q: %w", gr.profile, err)
 		}
 		for _, sg := range signers {

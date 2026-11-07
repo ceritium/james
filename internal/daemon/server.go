@@ -242,6 +242,7 @@ func (s *Server) run(ctx context.Context, pid int, req protocol.Request) (protoc
 		notify   = true
 		anchorID string
 		sshSock  string
+		sshRefs  []provider.Ref
 		message  string
 	)
 	switch {
@@ -261,7 +262,7 @@ func (s *Server) run(ctx context.Context, pid int, req protocol.Request) (protoc
 			// The SSH agent finds keys through a grant on an ancestor, so without one it has nothing to serve.
 			switch {
 			case hasAnchor:
-				sshSock = s.d.SSHSocket
+				sshSock, sshRefs = s.d.SSHSocket, pr.sshKeys
 			case len(pr.refs) == 0:
 				return protocol.Response{}, fmt.Errorf("profile %q has only SSH keys, which need an agent session (%s)",
 					pr.name, strings.Join(pr.cfg.Anchors, ", "))
@@ -307,7 +308,7 @@ func (s *Server) run(ctx context.Context, pid int, req protocol.Request) (protoc
 		unique = append(unique, r)
 	}
 	values, err := s.d.Registry.ResolveAll(ctx, unique)
-	ev := audit.Event{Profile: profile, Refs: refStrings(refs), Env: sortedKeys(refs), Anchor: anchorID,
+	ev := audit.Event{Profile: profile, Refs: append(refStrings(refs), refList(sshRefs)...), Env: sortedKeys(refs), Anchor: anchorID,
 		PeerPID: pid, Command: req.Command, Cwd: req.Cwd, Reason: req.Reason}
 	if err != nil {
 		ev.Event, ev.Error = "error", err.Error()

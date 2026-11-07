@@ -192,6 +192,12 @@ func profiles() error {
 			vars = append(vars, v)
 		}
 		slices.Sort(vars)
+		switch n := len(p.SSHKeys); {
+		case n == 1:
+			vars = append(vars, "1 SSH key")
+		case n > 1:
+			vars = append(vars, fmt.Sprintf("%d SSH keys", n))
+		}
 		fmt.Fprintf(w, "%s\t%s\t%s\n", name, p.EffectiveTTL(), strings.Join(vars, ", "))
 	}
 	return w.Flush()
