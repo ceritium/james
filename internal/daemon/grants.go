@@ -5,6 +5,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/crypto/ssh"
+
 	"github.com/ceritium/james/internal/peer"
 )
 
@@ -15,6 +17,8 @@ type grant struct {
 	granted time.Time
 	expires time.Time
 	uses    int
+	// signers caches the profile's SSH keys from first use until the grant ends.
+	signers []ssh.Signer
 }
 
 type grantKey struct {
@@ -94,4 +98,46 @@ func (g *grants) pruneLocked() {
 			delete(g.m, k)
 		}
 	}
+}
+
+// forChain returns live grants anchored on any process in chain.
+func (g *grants) forChain(chain []peer.Proc) []grant {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.pruneLocked()
+	var out []grant
+	for _, p := range chain {
+		for k, gr := range g.m {
+			if k.pid == p.PID && k.startUS == p.StartUS {
+				out = append(out, *gr)
+			}
+		}
+	}
+	return out
+}
+
+// signers returns the grant's SSH keys, loading them on first use. Loading
+// talks to the provider, so it runs without holding the lock.
+func (g *grants) signers(gr grant, load func(profile string) ([]ssh.Signer, error)) ([]ssh.Signer, error) {
+	k := key(gr.profile, gr.anchor)
+	g.mu.Lock()
+	cur, ok := g.m[k]
+	if ok && cur.signers != nil {
+		g.mu.Unlock()
+		return cur.signers, nil
+	}
+	g.mu.Unlock()
+	if !ok {
+		return nil, nil
+	}
+	signers, err := load(gr.profile)
+	if err != nil {
+		return nil, err
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if cur, ok := g.m[k]; ok {
+		cur.signers = signers
+	}
+	return signers, nil
 }

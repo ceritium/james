@@ -37,6 +37,11 @@ profiles:
   quick:
     secrets:
       A: op://V/I/f
+  github:
+    ssh_keys:
+      - op://Personal/GitHub/private key?ssh-format=openssh
+      - ref: op://Work/deploy key/private key
+        account: Work
 `, 0o600)
 	c, err := Load(path, parse)
 	if err != nil {
@@ -49,7 +54,10 @@ profiles:
 	if c.Profiles["quick"].EffectiveTTL() != DefaultTTL || c.Anchors[0] != "claude" || !c.NotifyEnabled() {
 		t.Fatalf("defaults not applied: %+v", c)
 	}
-	if got := strings.Join(c.ProfileNames(), ","); got != "quick,restic" {
+	if k := c.Profiles["github"].SSHKeys; len(k) != 2 || k[1].Account != "Work" || !strings.HasPrefix(k[0].Ref, "op://Personal/GitHub/") {
+		t.Fatalf("ssh_keys = %+v", k)
+	}
+	if got := strings.Join(c.ProfileNames(), ","); got != "github,quick,restic" {
 		t.Fatalf("ProfileNames = %s", got)
 	}
 }
@@ -62,6 +70,7 @@ func TestLoadRejects(t *testing.T) {
 		"bad ref":      "profiles:\n  a:\n    secrets: {A: not-a-ref}\n",
 		"ttl too long": "profiles:\n  a:\n    ttl: 48h\n    secrets: {A: op://v/i/f}\n",
 		"no secrets":   "profiles:\n  a:\n    ttl: 1h\n",
+		"bad ssh ref":  "profiles:\n  a:\n    ssh_keys: [nope]\n",
 	}
 	for name, body := range cases {
 		if _, err := Load(write(t, body, 0o600), parse); err == nil {

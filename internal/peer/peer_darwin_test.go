@@ -90,3 +90,15 @@ func TestFindAncestor(t *testing.T) {
 		t.Fatal("Alive must reject a different start time")
 	}
 }
+
+func TestAncestors(t *testing.T) {
+	chain := Ancestors(os.Getpid())
+	if len(chain) < 2 || chain[0].PID != os.Getpid() || chain[1].PID != os.Getppid() {
+		t.Fatalf("chain = %+v", chain)
+	}
+	for i := 1; i < len(chain); i++ {
+		if chain[i].StartUS > chain[i-1].StartUS {
+			t.Fatalf("parent started after child: %+v", chain)
+		}
+	}
+}

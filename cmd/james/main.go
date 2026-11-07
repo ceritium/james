@@ -126,6 +126,9 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
+	if resp.Message != "" {
+		fmt.Fprintln(os.Stderr, "james:", resp.Message)
+	}
 	env := make([]string, 0, len(os.Environ())+len(resp.Env))
 	for _, kv := range os.Environ() {
 		if name, _, _ := strings.Cut(kv, "="); resp.Env[name] == "" {

@@ -48,6 +48,8 @@ type OnePassword struct {
 type Profile struct {
 	TTL     Duration          `yaml:"ttl"`
 	Secrets map[string]Secret `yaml:"secrets"`
+	// SSHKeys are private keys served through the daemon's SSH agent; they sign but never leave it.
+	SSHKeys []Secret `yaml:"ssh_keys"`
 }
 
 type Secret struct {
@@ -136,8 +138,13 @@ func (c *Config) validate(parse Parser) error {
 		if ttl := p.EffectiveTTL(); ttl < MinTTL || ttl > MaxTTL {
 			return fmt.Errorf("profile %q: ttl %s outside %s..%s", name, ttl, MinTTL, MaxTTL)
 		}
-		if len(p.Secrets) == 0 {
-			return fmt.Errorf("profile %q: no secrets", name)
+		if len(p.Secrets) == 0 && len(p.SSHKeys) == 0 {
+			return fmt.Errorf("profile %q: no secrets or ssh_keys", name)
+		}
+		for i, k := range p.SSHKeys {
+			if _, err := parse(k.Ref, k.Account); err != nil {
+				return fmt.Errorf("profile %q, ssh_keys[%d]: %w", name, i, err)
+			}
 		}
 		for env, s := range p.Secrets {
 			if err := ValidateEnvName(env); err != nil {

@@ -21,6 +21,9 @@ func (f *fakeProvider) Scheme() string              { return "op" }
 func (f *fakeProvider) Validate(provider.Ref) error { return nil }
 func (f *fakeProvider) Resolve(_ context.Context, r provider.Ref) (secret.Value, error) {
 	f.resolved = append(f.resolved, r.String())
+	if strings.Contains(r.Path, "sshkey") {
+		return secret.New(append([]byte(nil), testKeyPEM...)), nil
+	}
 	if strings.Contains(r.Path, "missing") {
 		return secret.Value{}, errors.New("not found")
 	}
@@ -67,6 +70,7 @@ func newHarness(t *testing.T) *harness {
 				"RESTIC_PASSWORD": {Ref: "op://Personal/restic/password"},
 			}},
 			"broken": {Secrets: map[string]config.Secret{"X": {Ref: "op://V/missing/f"}}},
+			"github": {SSHKeys: []config.Secret{{Ref: "op://Personal/sshkey/private key"}}},
 		},
 	}
 	h.s = NewServer(Deps{

@@ -36,12 +36,19 @@ profiles:
       AWS_SECRET_ACCESS_KEY:
         ref: op://Work/aws/secret
         account: work.1password.com
+  github:
+    ttl: 2h
+    ssh_keys:
+      - op://Personal/GitHub SSH/private key?ssh-format=openssh
 ```
+
+Profiles with `ssh_keys` set `SSH_AUTH_SOCK` to the daemon's SSH agent. The agent signs only for processes under an agent session holding a grant for that profile; to everything else it is empty. Keys never leave the daemon.
 
 ## Use
 
 ```sh
 james run -p restic -- restic backup ~/Documents   # prompts once, then reuses the grant
+james run -p github -- git push                    # SSH keys through the daemon's agent
 james bond deploy --reason "deploy staging"        # approve up front
 james run --secret TOKEN=op://Personal/x/token -- ./script   # one-off; prompts every time
 james list                                         # active grants

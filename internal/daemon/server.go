@@ -40,6 +40,12 @@ type Deps struct {
 	Registry   *provider.Registry
 	Audit      Auditor
 	Now        func() time.Time
+
+	// SSH agent: PeerPID reads the client PID without a signature check, since
+	// the client is ssh; Ancestors gives its verified process chain.
+	PeerPID   func(*net.UnixConn) (int, error)
+	Ancestors func(pid int) []peer.Proc
+	SSHSocket string
 }
 
 type Server struct {
@@ -141,6 +147,7 @@ type profileReq struct {
 	name    string
 	profile config.Profile
 	refs    map[string]provider.Ref // env → ref
+	sshKeys []provider.Ref
 	cfg     *config.Config
 }
 
@@ -161,7 +168,15 @@ func (s *Server) loadProfile(name string) (profileReq, error) {
 		}
 		refs[env] = ref
 	}
-	return profileReq{name: name, profile: p, refs: refs, cfg: cfg}, nil
+	keys := make([]provider.Ref, 0, len(p.SSHKeys))
+	for _, k := range p.SSHKeys {
+		ref, err := s.d.Registry.Parse(k.Ref, k.Account)
+		if err != nil {
+			return profileReq{}, err
+		}
+		keys = append(keys, ref)
+	}
+	return profileReq{name: name, profile: p, refs: refs, sshKeys: keys, cfg: cfg}, nil
 }
 
 func (s *Server) bond(pid int, req protocol.Request) (protocol.Response, error) {
@@ -191,14 +206,14 @@ func (s *Server) approveProfile(pid int, pr profileReq, anchor *peer.Proc, req p
 	ttl := pr.profile.EffectiveTTL()
 	var b strings.Builder
 	if anchor != nil {
-		fmt.Fprintf(&b, "give %s access to %q for %s: %s", anchor, pr.name, formatTTL(ttl), envNames(pr.refs))
+		fmt.Fprintf(&b, "give %s access to %q for %s: %s", anchor, pr.name, formatTTL(ttl), pr.describe())
 	} else {
-		fmt.Fprintf(&b, "use %q once: %s", pr.name, envNames(pr.refs))
+		fmt.Fprintf(&b, "use %q once: %s", pr.name, pr.describe())
 	}
 	writeContext(&b, req)
 
-	ev := audit.Event{Profile: pr.name, Refs: refStrings(pr.refs), Env: sortedKeys(pr.refs), PeerPID: pid,
-		Command: req.Command, Cwd: req.Cwd, Reason: req.Reason}
+	ev := audit.Event{Profile: pr.name, Refs: append(refStrings(pr.refs), refList(pr.sshKeys)...), Env: sortedKeys(pr.refs),
+		PeerPID: pid, Command: req.Command, Cwd: req.Cwd, Reason: req.Reason}
 	if anchor != nil {
 		ev.Anchor = anchor.String()
 	}
@@ -226,6 +241,8 @@ func (s *Server) run(ctx context.Context, pid int, req protocol.Request) (protoc
 		profile  string
 		notify   = true
 		anchorID string
+		sshSock  string
+		message  string
 	)
 	switch {
 	case req.Profile != "" && len(req.Secrets) > 0:
@@ -239,6 +256,18 @@ func (s *Server) run(ctx context.Context, pid int, req protocol.Request) (protoc
 		anchor, hasAnchor := s.d.FindAnchor(pid, pr.cfg.Anchors)
 		if hasAnchor {
 			anchorID = anchor.String()
+		}
+		if len(pr.sshKeys) > 0 {
+			// The SSH agent finds keys through a grant on an ancestor, so without one it has nothing to serve.
+			switch {
+			case hasAnchor:
+				sshSock = s.d.SSHSocket
+			case len(pr.refs) == 0:
+				return protocol.Response{}, fmt.Errorf("profile %q has only SSH keys, which need an agent session (%s)",
+					pr.name, strings.Join(pr.cfg.Anchors, ", "))
+			default:
+				message = "SSH keys skipped: no agent session to bind them to"
+			}
 		}
 
 		s.approvalMu.Lock()
@@ -291,14 +320,17 @@ func (s *Server) run(ctx context.Context, pid int, req protocol.Request) (protoc
 	if err := s.d.Audit.Write(ev); err != nil {
 		return protocol.Response{}, fmt.Errorf("audit log: %w", err)
 	}
-	env := make(map[string]string, len(refs))
+	env := make(map[string]string, len(refs)+1)
 	for name, r := range refs {
 		env[name] = string(values[r].Bytes())
+	}
+	if sshSock != "" {
+		env["SSH_AUTH_SOCK"] = sshSock
 	}
 	if notify && s.d.Notify != nil {
 		s.d.Notify(fmt.Sprintf("%s → %s", profile, shorten(strings.Join(req.Command, " "), 80)))
 	}
-	return protocol.Response{Env: env}, nil
+	return protocol.Response{Env: env, Message: message}, nil
 }
 
 // oneOff approves refs outside any profile. They are never granted for reuse.
@@ -351,7 +383,24 @@ func writeContext(b *strings.Builder, req protocol.Request) {
 	}
 }
 
-func envNames(refs map[string]provider.Ref) string { return strings.Join(sortedKeys(refs), ", ") }
+func (pr profileReq) describe() string {
+	parts := sortedKeys(pr.refs)
+	switch n := len(pr.sshKeys); {
+	case n == 1:
+		parts = append(parts, "1 SSH key")
+	case n > 1:
+		parts = append(parts, fmt.Sprintf("%d SSH keys", n))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func refList(refs []provider.Ref) []string {
+	out := make([]string, 0, len(refs))
+	for _, r := range refs {
+		out = append(out, r.String())
+	}
+	return out
+}
 
 func sortedKeys(refs map[string]provider.Ref) []string {
 	keys := make([]string, 0, len(refs))

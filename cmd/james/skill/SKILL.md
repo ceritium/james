@@ -1,6 +1,6 @@
 ---
 name: james
-description: Run commands that need secrets (API keys, tokens, passwords, credentials) through james, which asks the user for Touch ID and lends 1Password secrets for a limited time. Use whenever a command needs a secret in its environment, a tool fails for missing credentials, or you are about to reach for `op`, a `.env` file, or ask the user to paste a secret.
+description: Run commands that need secrets (API keys, tokens, passwords, credentials, SSH keys for git or ssh) through james, which asks the user for Touch ID and lends 1Password secrets for a limited time. Use whenever a command needs a secret in its environment, a tool fails for missing credentials, or you are about to reach for `op`, a `.env` file, or ask the user to paste a secret.
 ---
 
 # Secrets through james
@@ -16,6 +16,8 @@ The user keeps secrets in 1Password. They reach a command only through `james`, 
    ```
    The first run prompts the user. Later runs in this session reuse the grant until it expires, without prompting.
 3. Several commands coming? Approve once up front with `james bond <profile> --reason "<why>"`.
+
+Profiles with SSH keys set `SSH_AUTH_SOCK` for the command, so `james run -p <profile> -- git push` or `-- ssh host` signs with the profile's key. The key never leaves james.
 
 Each `james run` covers one command. Variables do not persist in your shell, so wrap every command that needs them, including `sh -c '...'` pipelines.
 

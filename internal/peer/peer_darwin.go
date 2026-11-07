@@ -102,23 +102,37 @@ func SelfCDHash() ([]byte, error) {
 	return buf[:n], nil
 }
 
-// Verify checks that the peer of conn runs exactly the same signed binary as this process.
-func Verify(conn *net.UnixConn) (Identity, error) {
+// PeerPID returns the PID from the peer's audit token, without checking its signature.
+func PeerPID(conn *net.UnixConn) (int, error) {
+	tok, err := token(conn)
+	if err != nil {
+		return 0, err
+	}
+	return int(C.token_pid(&tok)), nil
+}
+
+func token(conn *net.UnixConn) (C.audit_token_t, error) {
+	var tok C.audit_token_t
 	raw, err := conn.SyscallConn()
 	if err != nil {
-		return Identity{}, err
+		return tok, err
 	}
-	var tok C.audit_token_t
 	var sockErr error
 	if err := raw.Control(func(fd uintptr) {
 		if C.peer_token(C.int(fd), &tok) != 0 {
 			sockErr = errors.New("LOCAL_PEERTOKEN failed")
 		}
 	}); err != nil {
-		return Identity{}, err
+		return tok, err
 	}
-	if sockErr != nil {
-		return Identity{}, sockErr
+	return tok, sockErr
+}
+
+// Verify checks that the peer of conn runs exactly the same signed binary as this process.
+func Verify(conn *net.UnixConn) (Identity, error) {
+	tok, err := token(conn)
+	if err != nil {
+		return Identity{}, err
 	}
 
 	id := Identity{
@@ -164,26 +178,35 @@ func Lookup(pid int) (Proc, error) {
 	return Proc{PID: pid, StartUS: i.startUS, Name: procName(pid)}, nil
 }
 
-// FindAncestor walks up from pid to the nearest process whose argv[0] or
-// executable basename is in names. A parent that started after its child is a
-// reused PID, so the walk stops there.
-func FindAncestor(pid int, names []string) (Proc, bool) {
+// Ancestors returns pid and its ancestors, nearest first. A parent that started
+// after its child is a reused PID, so the chain stops there.
+func Ancestors(pid int) []Proc {
 	child, ok := info(pid)
 	if !ok {
-		return Proc{}, false
+		return nil
 	}
-	for cur := child.ppid; cur > 1; {
+	chain := []Proc{{PID: pid, StartUS: child.startUS, Name: procName(pid)}}
+	for cur := child.ppid; cur > 1 && len(chain) < 64; {
 		parent, ok := info(cur)
 		if !ok || parent.startUS > child.startUS {
-			return Proc{}, false
+			break
 		}
-		name := procName(cur)
+		chain = append(chain, Proc{PID: cur, StartUS: parent.startUS, Name: procName(cur)})
+		child, cur = parent, parent.ppid
+	}
+	return chain
+}
+
+// FindAncestor returns the nearest ancestor of pid whose argv[0] or executable
+// basename is in names.
+func FindAncestor(pid int, names []string) (Proc, bool) {
+	chain := Ancestors(pid)
+	for _, p := range chain[min(1, len(chain)):] {
 		for _, n := range names {
-			if name == n || exeName(cur) == n {
-				return Proc{PID: cur, StartUS: parent.startUS, Name: name}, true
+			if p.Name == n || exeName(p.PID) == n {
+				return p, true
 			}
 		}
-		child, cur = parent, parent.ppid
 	}
 	return Proc{}, false
 }

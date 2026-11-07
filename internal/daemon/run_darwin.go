@@ -32,6 +32,11 @@ func Run(version string) error {
 		return err
 	}
 	defer os.Remove(paths.Socket())
+	sshL, err := listen(paths.SSHSocket())
+	if err != nil {
+		return err
+	}
+	defer os.Remove(paths.SSHSocket())
 
 	auditLog, err := audit.Open(paths.LogDir())
 	if err != nil {
@@ -65,6 +70,9 @@ func Run(version string) error {
 		LoadConfig: func() (*config.Config, error) { return config.Load(paths.Config(), reg.Parse) },
 		Registry:   reg,
 		Audit:      auditLog,
+		PeerPID:    peer.PeerPID,
+		Ancestors:  peer.Ancestors,
+		SSHSocket:  paths.SSHSocket(),
 	})
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -72,6 +80,12 @@ func Run(version string) error {
 	go exitOnBinaryChange(ctx, stop)
 
 	log.Printf("james daemon %s listening on %s", version, paths.Socket())
+	go func() {
+		if err := srv.ServeSSH(ctx, sshL); err != nil {
+			log.Printf("ssh agent: %v", err)
+			stop()
+		}
+	}()
 	return srv.Serve(ctx, l)
 }
 

@@ -20,6 +20,8 @@ func StateDir() string { return filepath.Join(home(), "Library", "Application Su
 
 func Socket() string { return filepath.Join(StateDir(), "james.sock") }
 
+func SSHSocket() string { return filepath.Join(StateDir(), "ssh.sock") }
+
 func LogDir() string { return filepath.Join(home(), "Library", "Logs", "james") }
 
 func Config() string { return filepath.Join(home(), ".config", "james", "config.yaml") }
