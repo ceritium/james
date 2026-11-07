@@ -41,17 +41,25 @@ func Do(req protocol.Request) (protocol.Response, error) {
 }
 
 func connect() (*net.UnixConn, error) {
-	started := false
+	started, replaced := false, false
 	deadline := time.Now().Add(startTimeout)
 	var lastErr error
 	for time.Now().Before(deadline) {
-		conn, err := dial()
+		conn, id, err := dial()
 		if err == nil {
 			return conn, nil
 		}
 		lastErr = err
-		// A daemon from an older build exits by itself within seconds; keep retrying.
-		if !started && !errors.Is(err, peer.ErrUntrusted) {
+		switch {
+		case errors.Is(err, peer.ErrUntrusted) && !replaced:
+			// Another james build owns the socket. Its grants must not carry
+			// over to this binary, so stop it and start our own.
+			if err := stopDaemon(id.PID); err != nil {
+				return nil, err
+			}
+			replaced, started = true, false
+			continue
+		case !started && !errors.Is(err, peer.ErrUntrusted):
 			if err := spawn(); err != nil {
 				return nil, fmt.Errorf("start daemon: %w", err)
 			}
@@ -62,16 +70,37 @@ func connect() (*net.UnixConn, error) {
 	return nil, fmt.Errorf("connect to daemon: %w", lastErr)
 }
 
-func dial() (*net.UnixConn, error) {
+func dial() (*net.UnixConn, peer.Identity, error) {
 	conn, err := net.DialUnix("unix", nil, &net.UnixAddr{Name: paths.Socket(), Net: "unix"})
 	if err != nil {
-		return nil, err
+		return nil, peer.Identity{}, err
 	}
-	if _, err := peer.Verify(conn); err != nil {
+	id, err := peer.Verify(conn)
+	if err != nil {
 		conn.Close()
-		return nil, err
+		return nil, id, err
 	}
-	return conn, nil
+	return conn, id, nil
+}
+
+func stopDaemon(pid int) error {
+	if pid <= 1 {
+		return errors.New("daemon socket peer has no pid")
+	}
+	if name := peer.ExeName(pid); name != "james" {
+		return fmt.Errorf("daemon socket is held by %q (pid %d), not james; refusing to stop it", name, pid)
+	}
+	fmt.Fprintf(os.Stderr, "james: stopping daemon from another build (pid %d)\n", pid)
+	if err := syscall.Kill(pid, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
+		return fmt.Errorf("stop daemon pid %d: %w", pid, err)
+	}
+	for range 30 {
+		if syscall.Kill(pid, 0) != nil {
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return fmt.Errorf("daemon pid %d did not exit", pid)
 }
 
 func spawn() error {

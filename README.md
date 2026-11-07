@@ -61,3 +61,4 @@ james profiles
 - The child process receives secrets as environment variables and can do anything with them.
 - Any process the agent spawns during a grant can use that profile.
 - Grants live in daemon memory; they are lost when the daemon restarts.
+- Each build has its own code signature. Running a different `james` build stops the current daemon and its grants, so keep a single install.
