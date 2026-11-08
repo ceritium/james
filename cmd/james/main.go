@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"slices"
 	"strings"
 	"syscall"
@@ -23,6 +24,9 @@ import (
 )
 
 var version = "dev"
+
+// AppKit, used by the daemon's approval window, must run on the main thread.
+func init() { runtime.LockOSThread() }
 
 const usage = `james lends secrets to coding agents, approved with Touch ID.
 

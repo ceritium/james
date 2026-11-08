@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ceritium/james/internal/approve"
 	"github.com/ceritium/james/internal/audit"
 	"github.com/ceritium/james/internal/config"
 	"github.com/ceritium/james/internal/peer"
@@ -58,6 +59,9 @@ type harness struct {
 	audit    *fakeAudit
 	prov     *fakeProvider
 	clock    *clock
+	// lastPrompt is the latest approval request; pickTTL is the duration the fake user picks (0 = default).
+	lastPrompt approve.Prompt
+	pickTTL    time.Duration
 }
 
 func newHarness(t *testing.T) *harness {
@@ -87,12 +91,13 @@ func newHarness(t *testing.T) *harness {
 			return *h.anchor, true
 		},
 		Alive: func(peer.Proc) bool { return true },
-		Approve: func(reason string) error {
-			h.prompts = append(h.prompts, reason)
+		Approve: func(p approve.Prompt) (time.Duration, error) {
+			h.prompts = append(h.prompts, p.Text)
+			h.lastPrompt = p
 			if h.deny {
-				return errors.New("denied")
+				return 0, errors.New("denied")
 			}
-			return nil
+			return h.pickTTL, nil
 		},
 		Notify:     func(m string) { h.notified = append(h.notified, m) },
 		LoadConfig: func() (*config.Config, error) { return cfg, nil },
@@ -220,6 +225,27 @@ func TestRunErrors(t *testing.T) {
 	for name, req := range cases {
 		if resp := h.s.Dispatch(context.Background(), 1, req); resp.Error == "" || resp.Env != nil {
 			t.Errorf("%s: %+v", name, resp)
+		}
+	}
+}
+
+func TestGrantUsesChosenTTLWithinProfileLimit(t *testing.T) {
+	for _, tc := range []struct{ pick, want time.Duration }{
+		{15 * time.Minute, 15 * time.Minute},
+		{0, time.Hour},
+		{48 * time.Hour, time.Hour},
+	} {
+		h := newHarness(t)
+		h.pickTTL = tc.pick
+		if resp := h.run("restic"); resp.Error != "" {
+			t.Fatal(resp.Error)
+		}
+		if got := h.lastPrompt.TTLs; len(got) != 2 || got[0] != 15*time.Minute || got[1] != time.Hour {
+			t.Fatalf("choices = %v", got)
+		}
+		g := h.s.grants.list()[0]
+		if d := g.expires.Sub(g.granted); d != tc.want {
+			t.Errorf("pick %v: grant lasts %v, want %v", tc.pick, d, tc.want)
 		}
 	}
 }

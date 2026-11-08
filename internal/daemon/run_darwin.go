@@ -22,8 +22,22 @@ import (
 	"github.com/ceritium/james/internal/provider/onepassword"
 )
 
-// Run serves until a signal arrives or the james binary on disk changes.
+// Run serves until a signal arrives or the james binary on disk changes. The
+// approval window needs AppKit on the main thread, so Run must be called from
+// the main goroutine locked to it; it exits the process when serving stops.
 func Run(version string) error {
+	go func() {
+		if err := serve(version); err != nil {
+			log.Print(err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}()
+	approve.Main()
+	return nil
+}
+
+func serve(version string) error {
 	// Secrets pass through this process; a core dump would write them to disk.
 	if err := syscall.Setrlimit(syscall.RLIMIT_CORE, &syscall.Rlimit{}); err != nil {
 		return err
@@ -72,7 +86,7 @@ func Run(version string) error {
 		},
 		FindAnchor: peer.FindAncestor,
 		Alive:      peer.Alive,
-		Approve:    approve.TouchID,
+		Approve:    approve.Ask,
 		Notify:     notify,
 		LoadConfig: func() (*config.Config, error) { return config.Load(paths.Config(), reg.Parse) },
 		Registry:   reg,

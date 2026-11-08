@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ceritium/james/internal/approve"
 	"github.com/ceritium/james/internal/audit"
 	"github.com/ceritium/james/internal/config"
 	"github.com/ceritium/james/internal/peer"
@@ -34,7 +35,7 @@ type Deps struct {
 	Verify     func(*net.UnixConn) (pid int, err error)
 	FindAnchor func(pid int, names []string) (peer.Proc, bool)
 	Alive      func(peer.Proc) bool
-	Approve    func(reason string) error
+	Approve    func(approve.Prompt) (time.Duration, error)
 	Notify     func(msg string)
 	LoadConfig func() (*config.Config, error)
 	Registry   *provider.Registry
@@ -205,31 +206,56 @@ func (s *Server) bond(pid int, req protocol.Request) (protocol.Response, error) 
 func (s *Server) approveProfile(pid int, pr profileReq, anchor *peer.Proc, req protocol.Request) (grant, error) {
 	ttl := pr.profile.EffectiveTTL()
 	var b strings.Builder
+	p := approve.Prompt{Rows: append(pr.rows(), contextRows(req)...), Quote: shorten(req.Reason, 300)}
 	if anchor != nil {
 		fmt.Fprintf(&b, "give %s access to %q for %s: %s", anchor, pr.name, formatTTL(ttl), pr.describe())
+		p.Title = fmt.Sprintf("%s wants %q", anchor.Name, pr.name)
+		p.Subtitle = fmt.Sprintf("Lent to %s and the commands it runs. Ends when time runs out, you revoke it, or %s exits.", anchor, anchor.Name)
+		p.TTLs, p.TTL = ttlChoices(ttl), ttl
 	} else {
 		fmt.Fprintf(&b, "use %q once: %s", pr.name, pr.describe())
+		p.Title = fmt.Sprintf("Use %q once", pr.name)
+		p.Subtitle = "No agent session above this command, so this covers this run only."
 	}
 	writeContext(&b, req)
+	p.Text = b.String()
 
 	ev := audit.Event{Profile: pr.name, Refs: append(refStrings(pr.refs), refList(pr.sshKeys)...), Env: sortedKeys(pr.refs),
 		PeerPID: pid, Command: req.Command, Cwd: req.Cwd, Reason: req.Reason}
 	if anchor != nil {
 		ev.Anchor = anchor.String()
 	}
-	if err := s.d.Approve(b.String()); err != nil {
+	chosen, err := s.d.Approve(p)
+	if err != nil {
 		ev.Event, ev.Error = "denied", err.Error()
 		_ = s.d.Audit.Write(ev)
 		return grant{}, err
 	}
+	if chosen <= 0 || chosen > ttl {
+		chosen = ttl
+	}
 	ev.Event = "approved"
+	if anchor != nil {
+		ev.TTL = formatTTL(chosen)
+	}
 	if err := s.d.Audit.Write(ev); err != nil {
 		return grant{}, fmt.Errorf("audit log: %w", err)
 	}
 	if anchor == nil {
 		return grant{expires: s.d.Now()}, nil
 	}
-	return s.grants.add(pr.name, *anchor, ttl), nil
+	return s.grants.add(pr.name, *anchor, chosen), nil
+}
+
+// ttlChoices offers shorter grants than the profile's maximum.
+func ttlChoices(limit time.Duration) []time.Duration {
+	var out []time.Duration
+	for _, d := range []time.Duration{15 * time.Minute, time.Hour, 4 * time.Hour, 8 * time.Hour} {
+		if d < limit {
+			out = append(out, d)
+		}
+	}
+	return append(out, limit)
 }
 
 func (s *Server) run(ctx context.Context, pid int, req protocol.Request) (protocol.Response, error) {
@@ -349,16 +375,25 @@ func (s *Server) oneOff(pid int, req protocol.Request) (map[string]provider.Ref,
 	}
 	var b strings.Builder
 	parts := make([]string, 0, len(refs))
+	rows := make([]approve.Row, 0, len(refs)+3)
 	for _, env := range sortedKeys(refs) {
 		parts = append(parts, fmt.Sprintf("%s as %s", refs[env], env))
+		rows = append(rows, approve.Row{Label: env, Value: refs[env].String(), Mono: true})
 	}
 	fmt.Fprintf(&b, "read %s once", strings.Join(parts, ", "))
 	writeContext(&b, req)
+	p := approve.Prompt{
+		Title:    fmt.Sprintf("Read %d secret(s) once", len(refs)),
+		Subtitle: "Not part of a profile, so this covers this run only.",
+		Rows:     append(rows, contextRows(req)...),
+		Quote:    shorten(req.Reason, 300),
+		Text:     b.String(),
+	}
 
 	ev := audit.Event{Refs: refStrings(refs), Env: sortedKeys(refs), PeerPID: pid,
 		Command: req.Command, Cwd: req.Cwd, Reason: req.Reason}
 	s.approvalMu.Lock()
-	err := s.d.Approve(b.String())
+	_, err := s.d.Approve(p)
 	s.approvalMu.Unlock()
 	if err != nil {
 		ev.Event, ev.Error = "denied", err.Error()
@@ -382,6 +417,31 @@ func writeContext(b *strings.Builder, req protocol.Request) {
 	if req.Reason != "" {
 		fmt.Fprintf(b, "\nreason: %s", shorten(req.Reason, 160))
 	}
+}
+
+func contextRows(req protocol.Request) []approve.Row {
+	var rows []approve.Row
+	if len(req.Command) > 0 {
+		rows = append(rows, approve.Row{Label: "Command", Value: "$ " + shorten(strings.Join(req.Command, " "), 300), Mono: true})
+	}
+	if req.Cwd != "" {
+		rows = append(rows, approve.Row{Label: "Directory", Value: tildify(req.Cwd), Mono: true})
+	}
+	return rows
+}
+
+func (pr profileReq) rows() []approve.Row {
+	var rows []approve.Row
+	if len(pr.refs) > 0 {
+		rows = append(rows, approve.Row{Label: "Variables", Value: strings.Join(sortedKeys(pr.refs), "\n"), Mono: true})
+	}
+	switch n := len(pr.sshKeys); {
+	case n == 1:
+		rows = append(rows, approve.Row{Label: "SSH", Value: "1 key, for ssh and git"})
+	case n > 1:
+		rows = append(rows, approve.Row{Label: "SSH", Value: fmt.Sprintf("%d keys, for ssh and git", n)})
+	}
+	return rows
 }
 
 func (pr profileReq) describe() string {
@@ -420,11 +480,7 @@ func refStrings(refs map[string]provider.Ref) []string {
 	return out
 }
 
-func formatTTL(d time.Duration) string {
-	s := d.String()
-	s = strings.TrimSuffix(s, "0s")
-	return strings.TrimSuffix(s, "0m")
-}
+func formatTTL(d time.Duration) string { return approve.FormatDuration(d) }
 
 func shorten(s string, n int) string {
 	if r := []rune(s); len(r) > n {

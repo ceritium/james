@@ -59,7 +59,10 @@ var mu sync.Mutex
 func TouchID(reason string) error {
 	mu.Lock()
 	defer mu.Unlock()
+	return touchid(reason)
+}
 
+func touchid(reason string) error {
 	cReason := C.CString(reason)
 	defer C.free(unsafe.Pointer(cReason))
 	buf := make([]byte, 256)

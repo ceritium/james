@@ -23,6 +23,7 @@ type Event struct {
 	Command []string  `json:"command,omitempty"`
 	Cwd     string    `json:"cwd,omitempty"`
 	Reason  string    `json:"reason,omitempty"`
+	TTL     string    `json:"ttl,omitempty"`
 	Error   string    `json:"error,omitempty"`
 }
 
