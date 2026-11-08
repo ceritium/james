@@ -1,17 +1,13 @@
 //go:build darwin && cgo
 
-// Package client talks to the daemon, starting it if needed, and refuses any
-// daemon that is not the same signed james binary.
+// Package client talks to the daemon and refuses any daemon that is not the
+// same signed james binary.
 package client
 
 import (
 	"errors"
 	"fmt"
 	"net"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"syscall"
 	"time"
 
 	"github.com/ceritium/james/internal/paths"
@@ -19,7 +15,7 @@ import (
 	"github.com/ceritium/james/internal/protocol"
 )
 
-const startTimeout = 5 * time.Second
+const connectTimeout = 3 * time.Second
 
 func Do(req protocol.Request) (protocol.Response, error) {
 	conn, err := connect()
@@ -40,34 +36,23 @@ func Do(req protocol.Request) (protocol.Response, error) {
 	return resp, nil
 }
 
+// connect never starts the daemon: launchd does, so it never inherits the
+// environment or sandbox of whatever ran the client.
 func connect() (*net.UnixConn, error) {
-	started, replaced := false, false
-	deadline := time.Now().Add(startTimeout)
-	var lastErr error
-	for time.Now().Before(deadline) {
+	deadline := time.Now().Add(connectTimeout)
+	for {
 		conn, id, err := dial()
-		if err == nil {
-			return conn, nil
-		}
-		lastErr = err
 		switch {
-		case errors.Is(err, peer.ErrUntrusted) && !replaced:
-			// Another james build owns the socket. Its grants must not carry
-			// over to this binary, so stop it and start our own.
-			if err := stopDaemon(id.PID); err != nil {
-				return nil, err
-			}
-			replaced, started = true, false
-			continue
-		case !started && !errors.Is(err, peer.ErrUntrusted):
-			if err := spawn(); err != nil {
-				return nil, fmt.Errorf("start daemon: %w", err)
-			}
-			started = true
+		case err == nil:
+			return conn, nil
+		case errors.Is(err, peer.ErrUntrusted):
+			return nil, fmt.Errorf("the running daemon (pid %d) is a different james build; keep a single install and restart its daemon: %w", id.PID, err)
+		case time.Now().After(deadline):
+			return nil, fmt.Errorf("james daemon is not running; start it with its LaunchAgent or `james daemon`: %w", err)
 		}
-		time.Sleep(150 * time.Millisecond)
+		// launchd may be restarting it, e.g. right after an upgrade.
+		time.Sleep(200 * time.Millisecond)
 	}
-	return nil, fmt.Errorf("connect to daemon: %w", lastErr)
 }
 
 func dial() (*net.UnixConn, peer.Identity, error) {
@@ -81,49 +66,4 @@ func dial() (*net.UnixConn, peer.Identity, error) {
 		return nil, id, err
 	}
 	return conn, id, nil
-}
-
-func stopDaemon(pid int) error {
-	if pid <= 1 {
-		return errors.New("daemon socket peer has no pid")
-	}
-	if name := peer.ExeName(pid); name != "james" {
-		return fmt.Errorf("daemon socket is held by %q (pid %d), not james; refusing to stop it", name, pid)
-	}
-	fmt.Fprintf(os.Stderr, "james: stopping daemon from another build (pid %d)\n", pid)
-	if err := syscall.Kill(pid, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
-		return fmt.Errorf("stop daemon pid %d: %w", pid, err)
-	}
-	for range 30 {
-		if syscall.Kill(pid, 0) != nil {
-			return nil
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	return fmt.Errorf("daemon pid %d did not exit", pid)
-}
-
-func spawn() error {
-	exe, err := os.Executable()
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(paths.LogDir(), 0o700); err != nil {
-		return err
-	}
-	logf, err := os.OpenFile(filepath.Join(paths.LogDir(), "daemon.log"),
-		os.O_WRONLY|os.O_APPEND|os.O_CREATE|syscall.O_NOFOLLOW, 0o600)
-	if err != nil {
-		return err
-	}
-	defer logf.Close()
-	cmd := exec.Command(exe, "daemon")
-	cmd.Stdout, cmd.Stderr = logf, logf
-	cmd.Dir = "/"
-	cmd.Env = []string{"HOME=" + os.Getenv("HOME"), "PATH=/usr/bin:/bin:/usr/sbin:/sbin"}
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-	return cmd.Process.Release()
 }

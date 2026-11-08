@@ -14,6 +14,8 @@ make install          # builds, signs with the hardened runtime, installs to ~/.
 james skill-install   # teaches Claude Code to use james; --dir for other agents
 ```
 
+Run `james daemon` as a LaunchAgent with `KeepAlive` (nix-config does it in `home/james.nix`), or by hand in a terminal.
+
 ## Configure
 
 `~/.config/james/config.yaml` (must be `chmod 600`):
@@ -60,7 +62,7 @@ james log -f                                       # audit log; -p PROFILE, --si
 
 ## How it works
 
-- A per-user daemon is the only process that talks to 1Password. The CLI starts it on demand.
+- A per-user daemon is the only process that talks to 1Password. Run it with a LaunchAgent (`james daemon`, `KeepAlive`); the CLI never starts it, so it never inherits an agent's environment.
 - The daemon accepts only clients that are the exact same signed `james` binary, checked through the socket's audit token and code signature, not the PID.
 - A grant binds to the nearest ancestor process named in `anchors` (PID plus start time). It ends when it expires, when it is revoked, or when that agent process exits. Without an agent ancestor, every run prompts.
 - One-off `--secret` refs always prompt and are never reused.
@@ -73,4 +75,4 @@ james log -f                                       # audit log; -p PROFILE, --si
 - The child process receives secrets as environment variables and can do anything with them. `james run` drops variables that load extra code into it (`NODE_OPTIONS`, `BASH_ENV`, `DYLD_*`, `GIT_SSH_COMMAND`…).
 - Any process the agent spawns during a grant can use that profile.
 - Grants live in daemon memory; they are lost when the daemon restarts.
-- Each build has its own code signature. Running a different `james` build stops the current daemon and its grants, so keep a single install.
+- Each build has its own code signature, and the CLI refuses a daemon from another build. Keep a single install.

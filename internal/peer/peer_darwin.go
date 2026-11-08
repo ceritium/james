@@ -250,9 +250,6 @@ func procName(pid int) string {
 	return exeName(pid)
 }
 
-// ExeName is the basename of the executable running as pid, or "" if unknown.
-func ExeName(pid int) string { return exeName(pid) }
-
 func exeName(pid int) string {
 	buf := make([]byte, C.PROC_PIDPATHINFO_MAXSIZE)
 	n := C.proc_pidpath(C.int(pid), unsafe.Pointer(&buf[0]), C.uint32_t(len(buf)))

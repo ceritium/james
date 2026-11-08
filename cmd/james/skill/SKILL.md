@@ -34,4 +34,4 @@ Each `james run` covers one command. Variables do not persist in your shell, so 
 - `unknown profile`: run `james profiles` and pick an existing one, or ask the user.
 - `request denied`: the user said no; ask before doing anything else that needs secrets.
 - `Touch ID unavailable`: the Mac may be in clamshell mode; tell the user.
-- `stopping daemon from another build`: harmless; previous grants are gone and the next run prompts again.
+- `james daemon is not running` or `a different james build`: tell the user; do not start the daemon yourself.
