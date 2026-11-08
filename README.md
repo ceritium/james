@@ -70,7 +70,7 @@ james log -f                                       # audit log; -p PROFILE, --si
 
 - SSH private keys are fetched from 1Password for each signature and wiped afterwards; only public keys are cached. Wiping RSA keys is best effort in Go.
 - Build with `make install`: a plain `go build` lacks the hardened runtime, so root could read secrets from daemon memory (the daemon logs a warning).
-- The child process receives secrets as environment variables and can do anything with them.
+- The child process receives secrets as environment variables and can do anything with them. `james run` drops variables that load extra code into it (`NODE_OPTIONS`, `BASH_ENV`, `DYLD_*`, `GIT_SSH_COMMAND`…).
 - Any process the agent spawns during a grant can use that profile.
 - Grants live in daemon memory; they are lost when the daemon restarts.
 - Each build has its own code signature. Running a different `james` build stops the current daemon and its grants, so keep a single install.

@@ -137,14 +137,9 @@ func run(args []string) error {
 	if resp.Message != "" {
 		fmt.Fprintln(os.Stderr, "james:", resp.Message)
 	}
-	env := make([]string, 0, len(os.Environ())+len(resp.Env))
-	for _, kv := range os.Environ() {
-		if name, _, _ := strings.Cut(kv, "="); resp.Env[name] == "" {
-			env = append(env, kv)
-		}
-	}
-	for name, v := range resp.Env {
-		env = append(env, name+"="+v)
+	env, removed := commandEnv(os.Environ(), resp.Env)
+	if len(removed) > 0 {
+		fmt.Fprintf(os.Stderr, "james: removed %s from the environment: they can make the command run other code\n", strings.Join(removed, ", "))
 	}
 	return syscall.Exec(path, command, env)
 }
