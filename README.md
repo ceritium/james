@@ -54,6 +54,7 @@ james run --secret TOKEN=op://Personal/x/token -- ./script   # one-off; prompts 
 james list                                         # active grants
 james revoke deploy                                # or --all
 james profiles
+james log -f                                       # audit log; -p PROFILE, --since 2h, --json
 ```
 
 ## How it works

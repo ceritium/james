@@ -32,6 +32,8 @@ Usage:
   james run --secret VAR=REF [--secret ...] [--account A] -- COMMAND [ARG...]
   james list                               active grants
   james revoke PROFILE | --all
+  james log [-n N] [-p PROFILE] [--event E] [--since DUR] [-f] [--json]
+                                           audit log of approvals and uses
   james profiles                           profiles in ` + "~/.config/james/config.yaml" + `
   james skill-install [--dir DIR]          install the agent skill (default ~/.claude/skills)
   james daemon                             run the daemon in the foreground
@@ -52,6 +54,8 @@ func main() {
 		err = list()
 	case "revoke":
 		err = revoke(args)
+	case "log":
+		err = logCmd(args)
 	case "profiles":
 		err = profiles()
 	case "daemon":
