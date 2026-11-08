@@ -15,13 +15,19 @@ import (
 	"github.com/ceritium/james/internal/secret"
 )
 
-type fakeProvider struct{ resolved []string }
+type fakeProvider struct {
+	resolved []string
+	keyPEM   []byte // overrides testKeyPEM
+}
 
 func (f *fakeProvider) Scheme() string              { return "op" }
 func (f *fakeProvider) Validate(provider.Ref) error { return nil }
 func (f *fakeProvider) Resolve(_ context.Context, r provider.Ref) (secret.Value, error) {
 	f.resolved = append(f.resolved, r.String())
 	if strings.Contains(r.Path, "sshkey") {
+		if f.keyPEM != nil {
+			return secret.New(append([]byte(nil), f.keyPEM...)), nil
+		}
 		return secret.New(append([]byte(nil), testKeyPEM...)), nil
 	}
 	if strings.Contains(r.Path, "missing") {

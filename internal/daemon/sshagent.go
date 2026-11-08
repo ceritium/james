@@ -3,10 +3,14 @@ package daemon
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/rsa"
 	"errors"
 	"fmt"
 	"log"
+	"math/big"
 	"net"
 
 	"golang.org/x/crypto/ssh"
@@ -14,6 +18,7 @@ import (
 
 	"github.com/ceritium/james/internal/audit"
 	"github.com/ceritium/james/internal/peer"
+	"github.com/ceritium/james/internal/provider"
 )
 
 var errManaged = errors.New("james: keys come from profiles; add or remove them in ~/.config/james/config.yaml")
@@ -52,25 +57,25 @@ type sshAgent struct {
 }
 
 type keyEntry struct {
-	signer ssh.Signer
-	grant  grant
+	key   sshKey
+	grant grant
 }
 
 func (a *sshAgent) keys() ([]keyEntry, error) {
 	var out []keyEntry
 	seen := map[string]bool{}
 	for _, gr := range a.s.grants.forChain(a.chain) {
-		signers, err := a.s.grants.signers(gr, a.s.loadSigners)
+		keys, err := a.s.grants.publicKeys(gr, a.s.loadPublicKeys)
 		if err != nil {
 			_ = a.s.d.Audit.Write(audit.Event{Event: "error", Profile: gr.profile, Anchor: gr.anchor.String(),
 				PeerPID: a.pid, Command: chainNames(a.chain), Error: "load ssh keys: " + err.Error()})
 			return nil, fmt.Errorf("profile %q: %w", gr.profile, err)
 		}
-		for _, sg := range signers {
-			blob := string(sg.PublicKey().Marshal())
+		for _, k := range keys {
+			blob := string(k.pub.Marshal())
 			if !seen[blob] {
 				seen[blob] = true
-				out = append(out, keyEntry{signer: sg, grant: gr})
+				out = append(out, keyEntry{key: k, grant: gr})
 			}
 		}
 	}
@@ -85,8 +90,7 @@ func (a *sshAgent) List() ([]*agent.Key, error) {
 	}
 	out := make([]*agent.Key, 0, len(entries))
 	for _, e := range entries {
-		pub := e.signer.PublicKey()
-		out = append(out, &agent.Key{Format: pub.Type(), Blob: pub.Marshal(), Comment: "james:" + e.grant.profile})
+		out = append(out, &agent.Key{Format: e.key.pub.Type(), Blob: e.key.pub.Marshal(), Comment: "james:" + e.grant.profile})
 	}
 	return out, nil
 }
@@ -102,12 +106,12 @@ func (a *sshAgent) SignWithFlags(key ssh.PublicKey, data []byte, flags agent.Sig
 	}
 	want := key.Marshal()
 	for _, e := range entries {
-		if !bytes.Equal(e.signer.PublicKey().Marshal(), want) {
+		if !bytes.Equal(e.key.pub.Marshal(), want) {
 			continue
 		}
-		sig, err := sign(e.signer, data, flags)
+		sig, err := a.s.signWith(e.key, data, flags)
 		ev := audit.Event{Event: "ssh-sign", Profile: e.grant.profile, Anchor: e.grant.anchor.String(),
-			PeerPID: a.pid, Command: chainNames(a.chain), Refs: []string{ssh.FingerprintSHA256(e.signer.PublicKey())}}
+			PeerPID: a.pid, Command: chainNames(a.chain), Refs: []string{ssh.FingerprintSHA256(e.key.pub)}}
 		if err != nil {
 			ev.Event, ev.Error = "error", err.Error()
 			_ = a.s.d.Audit.Write(ev)
@@ -139,32 +143,87 @@ func sign(s ssh.Signer, data []byte, flags agent.SignatureFlags) (*ssh.Signature
 	return as.SignWithAlgorithm(rand.Reader, data, algo)
 }
 
-// loadSigners fetches and parses a profile's private keys.
-func (s *Server) loadSigners(profile string) ([]ssh.Signer, error) {
+// loadPublicKeys derives the public keys of a profile's SSH keys.
+func (s *Server) loadPublicKeys(profile string) ([]sshKey, error) {
 	pr, err := s.loadProfile(profile)
 	if err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), resolveTimeout)
-	defer cancel()
-	signers := make([]ssh.Signer, 0, len(pr.sshKeys))
+	keys := make([]sshKey, 0, len(pr.sshKeys))
 	for _, ref := range pr.sshKeys {
-		v, err := s.d.Registry.Resolve(ctx, ref)
+		raw, sg, err := s.loadPrivateKey(ref)
 		if err != nil {
 			return nil, err
 		}
-		sg, err := ssh.ParsePrivateKey(v.Bytes())
-		v.Wipe()
-		if err != nil {
-			var missing *ssh.PassphraseMissingError
-			if errors.As(err, &missing) {
-				return nil, fmt.Errorf("%s is passphrase protected; use ?ssh-format=openssh on a 1Password SSH key item", ref)
-			}
-			return nil, fmt.Errorf("%s: parse private key: %w", ref, err)
-		}
-		signers = append(signers, sg)
+		keys = append(keys, sshKey{ref: ref, pub: sg.PublicKey()})
+		wipeKey(raw)
 	}
-	return signers, nil
+	return keys, nil
+}
+
+// signWith fetches the private key for one signature and wipes it afterwards,
+// so no private key stays in daemon memory between signatures.
+func (s *Server) signWith(k sshKey, data []byte, flags agent.SignatureFlags) (*ssh.Signature, error) {
+	raw, sg, err := s.loadPrivateKey(k.ref)
+	if err != nil {
+		return nil, err
+	}
+	defer wipeKey(raw)
+	if !bytes.Equal(sg.PublicKey().Marshal(), k.pub.Marshal()) {
+		return nil, fmt.Errorf("%s changed since it was granted; run james revoke and try again", k.ref)
+	}
+	return sign(sg, data, flags)
+}
+
+func (s *Server) loadPrivateKey(ref provider.Ref) (any, ssh.Signer, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), resolveTimeout)
+	defer cancel()
+	v, err := s.d.Registry.Resolve(ctx, ref)
+	if err != nil {
+		return nil, nil, err
+	}
+	raw, err := ssh.ParseRawPrivateKey(v.Bytes())
+	v.Wipe()
+	if err != nil {
+		var missing *ssh.PassphraseMissingError
+		if errors.As(err, &missing) {
+			return nil, nil, fmt.Errorf("%s is passphrase protected; use ?ssh-format=openssh on a 1Password SSH key item", ref)
+		}
+		return nil, nil, fmt.Errorf("%s: parse private key: %w", ref, err)
+	}
+	sg, err := ssh.NewSignerFromKey(raw)
+	if err != nil {
+		wipeKey(raw)
+		return nil, nil, fmt.Errorf("%s: %w", ref, err)
+	}
+	return raw, sg, nil
+}
+
+// wipeKey zeroes private key material. Best effort: big.Int arithmetic and
+// crypto/rsa's internal precomputed key leave copies Go exposes no handle to.
+func wipeKey(k any) {
+	switch k := k.(type) {
+	case *rsa.PrivateKey:
+		zeroInt(k.D)
+		for _, p := range k.Primes {
+			zeroInt(p)
+		}
+		zeroInt(k.Precomputed.Dp)
+		zeroInt(k.Precomputed.Dq)
+		zeroInt(k.Precomputed.Qinv)
+	case *ecdsa.PrivateKey:
+		zeroInt(k.D)
+	case ed25519.PrivateKey:
+		clear(k)
+	case *ed25519.PrivateKey:
+		clear(*k)
+	}
+}
+
+func zeroInt(x *big.Int) {
+	if x != nil {
+		clear(x.Bits())
+	}
 }
 
 func chainNames(chain []peer.Proc) []string {

@@ -24,6 +24,13 @@ import (
 
 // Run serves until a signal arrives or the james binary on disk changes.
 func Run(version string) error {
+	// Secrets pass through this process; a core dump would write them to disk.
+	if err := syscall.Setrlimit(syscall.RLIMIT_CORE, &syscall.Rlimit{}); err != nil {
+		return err
+	}
+	if !peer.HardenedRuntime() {
+		log.Print("warning: not signed with the hardened runtime; root can read secrets from daemon memory. Install with make install.")
+	}
 	if err := paths.PrivateDir(paths.StateDir()); err != nil {
 		return err
 	}

@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/rsa"
 	"encoding/pem"
+	"math/big"
 	"net"
 	"strings"
 	"testing"
@@ -123,5 +125,71 @@ func TestRunSetsSSHAuthSock(t *testing.T) {
 	h.anchor = nil
 	if resp := h.s.Dispatch(context.Background(), 1, protocol.Request{Op: protocol.OpRun, Profile: "github", Command: []string{"git"}}); resp.Error == "" {
 		t.Fatal("ssh-only profile without an agent session should fail")
+	}
+}
+
+func countSSHResolves(p *fakeProvider) int {
+	n := 0
+	for _, r := range p.resolved {
+		if strings.Contains(r, "sshkey") {
+			n++
+		}
+	}
+	return n
+}
+
+func TestSSHAgentFetchesPrivateKeyPerSignature(t *testing.T) {
+	h := newHarness(t)
+	bond(t, h, "github")
+	a := agentFor(t, h, []peer.Proc{sshClient, claude})
+	if _, err := a.List(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.List(); err != nil {
+		t.Fatal(err)
+	}
+	if n := countSSHResolves(h.prov); n != 1 {
+		t.Fatalf("public keys loaded %d times, want 1 (cached)", n)
+	}
+	for range 2 {
+		if _, err := a.Sign(testPub, []byte("x")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := countSSHResolves(h.prov); n != 3 {
+		t.Fatalf("resolves = %d, want 1 + one per signature", n)
+	}
+
+	_, other, _ := ed25519.GenerateKey(rand.Reader)
+	block, _ := ssh.MarshalPrivateKey(other, "")
+	h.prov.keyPEM = pem.EncodeToMemory(block)
+	if _, err := a.Sign(testPub, []byte("x")); err == nil {
+		t.Fatal("signed after the key was replaced in the provider")
+	}
+	if last := h.audit.events[len(h.audit.events)-1]; last.Event != "error" || !strings.Contains(last.Error, "changed") {
+		t.Fatalf("audit = %+v", last)
+	}
+}
+
+func TestWipeKey(t *testing.T) {
+	_, ed, _ := ed25519.GenerateKey(rand.Reader)
+	wipeKey(ed)
+	for _, b := range ed {
+		if b != 0 {
+			t.Fatal("ed25519 key not wiped")
+		}
+	}
+
+	r, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wipeKey(r)
+	for _, x := range append([]*big.Int{r.D, r.Precomputed.Dp, r.Precomputed.Dq, r.Precomputed.Qinv}, r.Primes...) {
+		for _, w := range x.Bits() {
+			if w != 0 {
+				t.Fatal("rsa key not wiped")
+			}
+		}
 	}
 }

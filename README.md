@@ -9,7 +9,7 @@ macOS on Apple Silicon only. Requires the 1Password desktop app with **Settings 
 ## Install
 
 ```sh
-go build -o ~/.local/bin/james ./cmd/james
+make install          # builds, signs with the hardened runtime, installs to ~/.local/bin
 james skill-install   # teaches Claude Code to use james; --dir for other agents
 ```
 
@@ -67,6 +67,8 @@ james log -f                                       # audit log; -p PROFILE, --si
 
 ## Limits
 
+- SSH private keys are fetched from 1Password for each signature and wiped afterwards; only public keys are cached. Wiping RSA keys is best effort in Go.
+- Build with `make install`: a plain `go build` lacks the hardened runtime, so root could read secrets from daemon memory (the daemon logs a warning).
 - The child process receives secrets as environment variables and can do anything with them.
 - Any process the agent spawns during a grant can use that profile.
 - Grants live in daemon memory; they are lost when the daemon restarts.

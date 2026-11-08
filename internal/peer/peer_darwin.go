@@ -9,6 +9,7 @@ package peer
 /*
 #cgo LDFLAGS: -framework Security -framework CoreFoundation -lbsm
 #include <sys/socket.h>
+#include <unistd.h>
 #include <sys/un.h>
 #include <bsm/libbsm.h>
 #include <libproc.h>
@@ -70,6 +71,13 @@ static int proc_info(int pid, int *ppid, unsigned long long *start_us) {
 	*start_us = bsd.pbi_start_tvsec * 1000000ULL + bsd.pbi_start_tvusec;
 	return 0;
 }
+
+// csops lives in a private header; the kernel interface is stable.
+int csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize);
+
+static int self_cs_status(unsigned int *status) {
+	return csops(getpid(), 0, status, sizeof(*status)); // 0 = CS_OPS_STATUS
+}
 */
 import "C"
 
@@ -91,6 +99,13 @@ type Identity struct {
 	PID        int
 	PIDVersion int
 	CDHash     []byte
+}
+
+// HardenedRuntime reports whether this process runs with the hardened runtime,
+// which keeps other processes, even root, from reading its memory.
+func HardenedRuntime() bool {
+	var status C.uint
+	return C.self_cs_status(&status) == 0 && status&0x10000 != 0 // CS_RUNTIME
 }
 
 func SelfCDHash() ([]byte, error) {
