@@ -16,7 +16,8 @@ static int touchid(const char *reason, char *errbuf, int errcap) {
 	@autoreleasepool {
 		LAContext *ctx = [[LAContext alloc] init];
 		ctx.localizedFallbackTitle = @"";
-		LAPolicy policy = LAPolicyDeviceOwnerAuthenticationWithBiometricsOrCompanion;
+		LAPolicy policy = LAPolicyDeviceOwnerAuthenticationWithBiometrics;
+		if (@available(macOS 15.0, *)) policy = LAPolicyDeviceOwnerAuthenticationWithBiometricsOrCompanion;
 		NSError *err = nil;
 		if (![ctx canEvaluatePolicy:policy error:&err]) {
 			snprintf(errbuf, errcap, "%s", err.localizedDescription.UTF8String);

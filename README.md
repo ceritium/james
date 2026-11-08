@@ -10,6 +10,7 @@ macOS on Apple Silicon only. Requires the 1Password desktop app with **Settings 
 
 ```sh
 make install          # builds, signs with the hardened runtime, installs to ~/.local/bin
+# or with Nix: nix build github:ceritium/james (package.nix; the flake's nixpkgs needs sandbox = false)
 james skill-install   # teaches Claude Code to use james; --dir for other agents
 ```
 
