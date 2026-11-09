@@ -109,6 +109,10 @@ func (p *Provider) Resolve(ctx context.Context, ref provider.Ref) (secret.Value,
 	}
 	value, err := client.Resolve(ctx, ref.String())
 	if err != nil {
+		if strings.Contains(err.Error(), "no vault matched") {
+			// Seen with vaults op resolves by name but the SDK does not, such as a business account's Employee vault.
+			return secret.Value{}, fmt.Errorf("1Password account %q: %w (try the vault ID instead of its name)", account, err)
+		}
 		return secret.Value{}, fmt.Errorf("1Password account %q: %w", account, err)
 	}
 	return secret.FromString(value), nil
