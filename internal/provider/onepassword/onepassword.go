@@ -103,11 +103,12 @@ func (p *Provider) Resolve(ctx context.Context, ref provider.Ref) (secret.Value,
 		return secret.Value{}, ErrNoAccount
 	}
 
-	client, err := p.clientLocked(ctx, account)
-	if err != nil {
-		return secret.Value{}, err
+	value, err := p.resolveLocked(ctx, account, ref)
+	if err != nil && strings.Contains(err.Error(), "invalid client id") {
+		// The desktop app can drop the session behind a cached client; only a new client recovers.
+		delete(p.clients, account)
+		value, err = p.resolveLocked(ctx, account, ref)
 	}
-	value, err := client.Resolve(ctx, ref.String())
 	if err != nil {
 		if strings.Contains(err.Error(), "no vault matched") {
 			// Seen with vaults op resolves by name but the SDK does not, such as a business account's Employee vault.
@@ -116,6 +117,14 @@ func (p *Provider) Resolve(ctx context.Context, ref provider.Ref) (secret.Value,
 		return secret.Value{}, fmt.Errorf("1Password account %q: %w", account, err)
 	}
 	return secret.FromString(value), nil
+}
+
+func (p *Provider) resolveLocked(ctx context.Context, account string, ref provider.Ref) (string, error) {
+	client, err := p.clientLocked(ctx, account)
+	if err != nil {
+		return "", err
+	}
+	return client.Resolve(ctx, ref.String())
 }
 
 func (p *Provider) clientLocked(ctx context.Context, account string) (secretsAPI, error) {

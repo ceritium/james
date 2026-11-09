@@ -11,16 +11,21 @@ import (
 type fakeClient struct {
 	account string
 	refs    []string
+	invalid bool
 }
 
 func (f *fakeClient) Resolve(_ context.Context, ref string) (string, error) {
 	f.refs = append(f.refs, ref)
+	if f.invalid {
+		return "", errors.New("invalid client id")
+	}
 	return f.account + ":" + ref, nil
 }
 
 type factory struct {
-	clients map[string]*fakeClient
-	created int
+	clients        map[string]*fakeClient
+	created        int
+	invalidClients int
 }
 
 func (f *factory) new(_ context.Context, account string) (secretsAPI, error) {
@@ -28,7 +33,10 @@ func (f *factory) new(_ context.Context, account string) (secretsAPI, error) {
 	if account == "broken" {
 		return nil, errors.New("desktop app locked")
 	}
-	c := &fakeClient{account: account}
+	c := &fakeClient{account: account, invalid: f.invalidClients > 0}
+	if c.invalid {
+		f.invalidClients--
+	}
 	f.clients[account] = c
 	return c, nil
 }
@@ -114,5 +122,20 @@ func TestResolveErrors(t *testing.T) {
 	}
 	if _, err := p.Resolve(ctx, ref(t, "op://V/I/f", "")); err == nil || f.created != 2 {
 		t.Fatalf("failed client must not be cached: created=%d err=%v", f.created, err)
+	}
+}
+
+func TestResolveReplacesInvalidClient(t *testing.T) {
+	ctx := context.Background()
+	p, f := newTest("Work")
+	f.invalidClients = 1
+	if _, err := p.Resolve(ctx, ref(t, "op://V/I/f", "")); err != nil || f.created != 2 {
+		t.Fatalf("expected one retry with a new client: created=%d err=%v", f.created, err)
+	}
+
+	f.invalidClients = 2
+	delete(p.clients, "Work")
+	if _, err := p.Resolve(ctx, ref(t, "op://V/I/f", "")); err == nil || f.created != 4 {
+		t.Fatalf("expected a single retry: created=%d err=%v", f.created, err)
 	}
 }
