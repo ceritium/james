@@ -24,9 +24,12 @@ Each `james run` covers one command. Variables do not persist in your shell, so 
 ## Rules
 
 - Never use `op`, read `.env` files or keychains, or ask the user to paste a secret.
-- No profile fits? Tell the user which variables are needed and for what, so they can add a profile to `~/.config/james/config.yaml`. Don't edit that file yourself.
+- No profile fits? Tell the user which variables are needed and for what, so they can add a profile to `~/.config/james/config.yaml`. Edit that file only when the user asks you to; then check it with `james profiles` and a run that confirms every variable arrives.
 - `james run --secret VAR=op://... -- <command>` is for one-off refs the user names explicitly. Don't use it otherwise.
-- Never print, log, or write a secret value, and don't echo the variables to check them. To confirm a value arrived, check only that it is non-empty: `sh -c 'test -n "$VAR"'`.
+- Never print, log, or write a secret value, and don't echo the variables to check them. To confirm values arrived, check only that they are non-empty:
+  ```sh
+  james run -p <profile> --reason "check the profile" -- sh -c 'for v in VAR1 VAR2; do eval "x=\$$v"; [ -n "$x" ] && echo "$v ok" || echo "$v EMPTY"; done'
+  ```
 - If the user denies the prompt, stop and ask. Don't retry or look for another route.
 
 ## Errors
@@ -35,3 +38,7 @@ Each `james run` covers one command. Variables do not persist in your shell, so 
 - `request denied`: the user said no; ask before doing anything else that needs secrets.
 - `Touch ID unavailable`: the Mac may be in clamshell mode; tell the user.
 - `james daemon is not running` or `a different james build`: tell the user; do not start the daemon yourself.
+- `config.yaml: no such file`, `not owned by the current user` or `writable by group or others`: the config is missing or unsafe; tell the user.
+- `account is required`: the reference names no `account` and the config sets no `providers.1password.default_account`.
+- `no vault matched`: the vault name is wrong or not visible to james; use the vault ID (the user can copy it from 1Password) instead of its name.
+- Each failing variable gets its own error line, and the command gets no secrets until all of them resolve.

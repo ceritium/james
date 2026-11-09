@@ -18,7 +18,7 @@ Run `james daemon` as a LaunchAgent with `KeepAlive` (nix-config does it in `hom
 
 ## Configure
 
-`~/.config/james/config.yaml` (must be `chmod 600`):
+`~/.config/james/config.yaml`, owned by you and not writable by group or others (`chmod 600`):
 
 ```yaml
 providers:
