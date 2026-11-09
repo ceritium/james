@@ -64,19 +64,19 @@ func serve(version string) error {
 		return err
 	}
 
-	// Read once for the provider default account; profiles are re-read per request.
-	var defaultAccount string
-	bootstrap, _ := provider.NewRegistry(onepassword.New(onepassword.Options{}))
-	if cfg, err := config.Load(paths.Config(), bootstrap.Parse); err == nil {
-		defaultAccount = cfg.Providers.OnePassword.DefaultAccount
-	} else {
-		log.Printf("config: %v", err)
-	}
-	reg, err := provider.NewRegistry(onepassword.New(onepassword.Options{
-		DefaultAccount: defaultAccount, IntegrationName: "james", IntegrationVersion: version,
-	}))
+	op := onepassword.New(onepassword.Options{IntegrationName: "james", IntegrationVersion: version})
+	reg, err := provider.NewRegistry(op)
 	if err != nil {
 		return err
+	}
+	// The config may be created or edited while the daemon runs, so every load refreshes the default.
+	loadConfig := func() (*config.Config, error) {
+		cfg, err := config.Load(paths.Config(), reg.Parse)
+		if err != nil {
+			return nil, err
+		}
+		op.SetDefaultAccount(cfg.Providers.OnePassword.DefaultAccount)
+		return cfg, nil
 	}
 
 	srv := NewServer(Deps{
@@ -88,7 +88,7 @@ func serve(version string) error {
 		Alive:      peer.Alive,
 		Approve:    approve.Ask,
 		Notify:     notify,
-		LoadConfig: func() (*config.Config, error) { return config.Load(paths.Config(), reg.Parse) },
+		LoadConfig: loadConfig,
 		Registry:   reg,
 		Audit:      auditLog,
 		PeerPID:    peer.PeerPID,

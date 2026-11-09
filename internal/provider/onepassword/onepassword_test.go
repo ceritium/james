@@ -103,6 +103,11 @@ func TestResolveErrors(t *testing.T) {
 		t.Errorf("no account error = %v", err)
 	}
 
+	p.SetDefaultAccount("Later")
+	if _, err := p.Resolve(ctx, ref(t, "op://V/I/f", "")); err != nil {
+		t.Errorf("default set after construction not used: %v", err)
+	}
+
 	p, f := newTest("broken")
 	if _, err := p.Resolve(ctx, ref(t, "op://V/I/f", "")); err == nil {
 		t.Fatal("expected client error")

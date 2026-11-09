@@ -34,11 +34,11 @@ type Options struct {
 }
 
 type Provider struct {
-	defaultAccount string
-	newClient      clientFactory
+	newClient clientFactory
 
-	mu      sync.Mutex
-	clients map[string]secretsAPI
+	mu             sync.Mutex
+	defaultAccount string
+	clients        map[string]secretsAPI
 }
 
 var _ provider.Provider = (*Provider)(nil)
@@ -66,6 +66,13 @@ func newWithFactory(defaultAccount string, f clientFactory) *Provider {
 	}
 }
 
+// SetDefaultAccount replaces the account used when a reference names none.
+func (p *Provider) SetDefaultAccount(account string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.defaultAccount = strings.TrimSpace(account)
+}
+
 func (p *Provider) Scheme() string { return Scheme }
 
 // Validate accepts op://vault/item[/section]/field, with an optional ?query on the field.
@@ -87,14 +94,14 @@ func (p *Provider) Resolve(ctx context.Context, ref provider.Ref) (secret.Value,
 	if err := p.Validate(ref); err != nil {
 		return secret.Value{}, err
 	}
+	// The SDK client is not documented as safe for concurrent use.
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
 	account := cmpOr(ref.Account, p.defaultAccount)
 	if account == "" {
 		return secret.Value{}, ErrNoAccount
 	}
-
-	// The SDK client is not documented as safe for concurrent use.
-	p.mu.Lock()
-	defer p.mu.Unlock()
 
 	client, err := p.clientLocked(ctx, account)
 	if err != nil {
