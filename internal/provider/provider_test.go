@@ -96,7 +96,7 @@ func TestNewRegistryRejectsDuplicateScheme(t *testing.T) {
 func TestResolveAllDedupes(t *testing.T) {
 	r, op, _ := newTestRegistry(t)
 	ref, _ := r.Parse("op://v/i/f", "Work")
-	values, err := r.ResolveAll(context.Background(), []Ref{ref, ref})
+	values, err := r.ResolveAll(context.Background(), map[string]Ref{"A": ref, "B": ref})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,11 +111,31 @@ func TestResolveAllWipesOnError(t *testing.T) {
 	a, _ := r.Parse("op://a", "")
 	b, _ := r.Parse("op://b", "")
 
-	values, err := r.ResolveAll(context.Background(), []Ref{a, b})
+	values, err := r.ResolveAll(context.Background(), map[string]Ref{"A": a, "B": b})
 	if err == nil || values != nil {
 		t.Fatalf("values=%v err=%v", values, err)
 	}
-	if !strings.Contains(err.Error(), "op://b") {
-		t.Errorf("error should name the failing ref: %v", err)
+	if !strings.Contains(err.Error(), "B: resolve op://b") {
+		t.Errorf("error should name the failing variable and ref: %v", err)
+	}
+}
+
+func TestResolveAllNamesEveryFailure(t *testing.T) {
+	op := &fakeProvider{scheme: "op", values: map[string]string{"a": "first"}, fail: map[string]bool{"b": true, "c": true}}
+	r, _ := NewRegistry(op)
+	a, _ := r.Parse("op://a", "")
+	b, _ := r.Parse("op://b", "")
+	c, _ := r.Parse("op://c", "")
+
+	_, err := r.ResolveAll(context.Background(), map[string]Ref{"Z": b, "Y": c, "X": a, "W": b})
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	want := "W: resolve op://b: backend down\nY: resolve op://c: backend down\nZ: resolve op://b: backend down"
+	if err.Error() != want {
+		t.Errorf("error =\n%v\nwant\n%v", err, want)
+	}
+	if len(op.calls) != 3 {
+		t.Errorf("each distinct ref should be tried once, calls=%d", len(op.calls))
 	}
 }

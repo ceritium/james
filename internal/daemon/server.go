@@ -329,11 +329,7 @@ func (s *Server) run(ctx context.Context, pid int, req protocol.Request) (protoc
 
 	ctx, cancel := context.WithTimeout(ctx, resolveTimeout)
 	defer cancel()
-	unique := make([]provider.Ref, 0, len(refs))
-	for _, r := range refs {
-		unique = append(unique, r)
-	}
-	values, err := s.d.Registry.ResolveAll(ctx, unique)
+	values, err := s.d.Registry.ResolveAll(ctx, refs)
 	ev := audit.Event{Profile: profile, Refs: append(refStrings(refs), refList(sshRefs)...), Env: sortedKeys(refs), Anchor: anchorID,
 		PeerPID: pid, Command: req.Command, Cwd: req.Cwd, Reason: req.Reason}
 	if err != nil {

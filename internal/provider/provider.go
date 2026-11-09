@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/ceritium/james/internal/secret"
@@ -95,20 +96,38 @@ func (r *Registry) Resolve(ctx context.Context, ref Ref) (secret.Value, error) {
 	return v, nil
 }
 
-// ResolveAll resolves each distinct ref once. It is all or nothing: on error,
-// values already fetched are wiped.
-func (r *Registry) ResolveAll(ctx context.Context, refs []Ref) (map[Ref]secret.Value, error) {
+// ResolveAll resolves the ref behind each environment variable, each distinct ref once.
+// It is all or nothing: on error, values already fetched are wiped. It still tries every
+// ref, so the error names each variable that failed rather than the first one reached.
+func (r *Registry) ResolveAll(ctx context.Context, refs map[string]Ref) (map[Ref]secret.Value, error) {
+	names := make([]string, 0, len(refs))
+	for name := range refs {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
 	values := make(map[Ref]secret.Value, len(refs))
-	for _, ref := range refs {
+	failed := map[Ref]error{}
+	var errs []error
+	for _, name := range names {
+		ref := refs[name]
 		if _, done := values[ref]; done {
 			continue
 		}
-		v, err := r.Resolve(ctx, ref)
-		if err != nil {
-			Wipe(values)
-			return nil, err
+		err, seen := failed[ref]
+		if !seen {
+			var v secret.Value
+			if v, err = r.Resolve(ctx, ref); err == nil {
+				values[ref] = v
+				continue
+			}
+			failed[ref] = err
 		}
-		values[ref] = v
+		errs = append(errs, fmt.Errorf("%s: %w", name, err))
+	}
+	if len(errs) > 0 {
+		Wipe(values)
+		return nil, errors.Join(errs...)
 	}
 	return values, nil
 }
