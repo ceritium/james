@@ -14,7 +14,7 @@ make install          # builds, signs with the hardened runtime, installs to ~/.
 james skill-install   # teaches Claude Code to use james; --dir for other agents
 ```
 
-Run `james daemon` as a LaunchAgent with `KeepAlive` (nix-config does it in `home/james.nix`), or by hand in a terminal.
+Run `james daemon` as a LaunchAgent with `KeepAlive`, or by hand in a terminal.
 
 ## Configure
 
@@ -76,3 +76,7 @@ james log -f                                       # audit log; -p PROFILE, --si
 - Any process the agent spawns during a grant can use that profile.
 - Grants live in daemon memory; they are lost when the daemon restarts.
 - Each build has its own code signature, and the CLI refuses a daemon from another build. Keep a single install.
+
+## License
+
+[MIT](LICENSE)
