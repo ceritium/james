@@ -11,7 +11,7 @@ type Prompt struct {
 	Subtitle string `json:"subtitle"`
 	// Quote is the agent's own reason, shown apart from the facts in Rows.
 	Quote string `json:"quote,omitempty"`
-	Rows  []Row  `json:"rows"`
+	Rows  []Row  `json:"rows,omitempty"`
 	// TTLs are the durations the user can pick; empty means a single use.
 	TTLs []time.Duration `json:"-"`
 	TTL  time.Duration   `json:"-"`

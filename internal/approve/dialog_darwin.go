@@ -274,7 +274,8 @@ func Ask(p Prompt) (time.Duration, error) {
 
 	ui := struct {
 		Prompt
-		TTLs     []string `json:"ttls"`
+		// omitempty: a JSON null becomes NSNull, which throws on -count and aborts the daemon.
+		TTLs     []string `json:"ttls,omitempty"`
 		TTLIndex int      `json:"ttl_index"`
 	}{Prompt: p}
 	for i, d := range p.TTLs {
