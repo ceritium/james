@@ -7,6 +7,7 @@ package client
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"time"
 
@@ -28,6 +29,9 @@ func Do(req protocol.Request) (protocol.Response, error) {
 	}
 	var resp protocol.Response
 	if err := protocol.Read(conn, &resp); err != nil {
+		if errors.Is(err, io.ErrUnexpectedEOF) {
+			return protocol.Response{}, fmt.Errorf("the daemon closed the connection without answering; if it crashed, launchd restarts it and its log in %s says why", paths.LogDir())
+		}
 		return protocol.Response{}, fmt.Errorf("read daemon response: %w", err)
 	}
 	if resp.Error != "" {
