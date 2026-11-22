@@ -1,6 +1,7 @@
 package approve
 
 import (
+	"encoding/json"
 	"strings"
 	"time"
 )
@@ -29,4 +30,21 @@ type Row struct {
 func FormatDuration(d time.Duration) string {
 	s := strings.TrimSuffix(d.String(), "0s")
 	return strings.TrimSuffix(s, "0m")
+}
+
+// dialogJSON is what the AppKit dialog reads.
+func dialogJSON(p Prompt) ([]byte, error) {
+	ui := struct {
+		Prompt
+		// omitempty: a JSON null becomes NSNull, which throws on -count.
+		TTLs     []string `json:"ttls,omitempty"`
+		TTLIndex int      `json:"ttl_index"`
+	}{Prompt: p}
+	for i, d := range p.TTLs {
+		ui.TTLs = append(ui.TTLs, FormatDuration(d))
+		if d == p.TTL {
+			ui.TTLIndex = i
+		}
+	}
+	return json.Marshal(ui)
 }

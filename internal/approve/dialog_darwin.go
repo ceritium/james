@@ -131,7 +131,8 @@ static void build(JamesDialog *d, NSDictionary *p) {
 	NSGridView *grid = [NSGridView gridViewWithViews:@[]];
 	grid.rowSpacing = 9;
 	grid.columnSpacing = 14;
-	for (NSDictionary *r in p[@"rows"]) {
+	NSArray *rows = [p[@"rows"] isKindOfClass:NSArray.class] ? p[@"rows"] : nil;
+	for (NSDictionary *r in rows) {
 		NSTextField *k = label(r[@"label"], [NSFont systemFontOfSize:11 weight:NSFontWeightMedium], NSColor.secondaryLabelColor, 0);
 		NSFont *vf = [r[@"mono"] boolValue]
 			? [NSFont monospacedSystemFontOfSize:12 weight:NSFontWeightRegular]
@@ -145,7 +146,7 @@ static void build(JamesDialog *d, NSDictionary *p) {
 		[stack addArrangedSubview:card(grid)];
 	}
 
-	NSArray *ttls = p[@"ttls"];
+	NSArray *ttls = [p[@"ttls"] isKindOfClass:NSArray.class] ? p[@"ttls"] : nil;
 	if (ttls.count > 0) {
 		NSSegmentedControl *seg = [NSSegmentedControl segmentedControlWithLabels:ttls
 			trackingMode:NSSegmentSwitchTrackingSelectOne target:nil action:nil];
@@ -227,13 +228,19 @@ static int ui_ask(const char *json, const char *reason, int timeout, long *ttlIn
 		}
 		NSString *why = [NSString stringWithUTF8String:reason];
 		dispatch_async(dispatch_get_main_queue(), ^{
-			build(d, p);
-			[d.ctx evaluatePolicy:LAPolicyDeviceOwnerAuthenticationWithBiometrics localizedReason:why
-			                reply:^(BOOL ok, NSError *e) {
-				dispatch_async(dispatch_get_main_queue(), ^{
-					[d finish:ok ? 1 : 0 error:ok ? nil : [NSString stringWithFormat:@"%@ (LAError %ld)", e.localizedDescription, (long)e.code]];
-				});
-			}];
+			// An uncaught exception here aborts the daemon and drops every grant it holds.
+			@try {
+				build(d, p);
+				[d.ctx evaluatePolicy:LAPolicyDeviceOwnerAuthenticationWithBiometrics localizedReason:why
+				                reply:^(BOOL ok, NSError *e) {
+					dispatch_async(dispatch_get_main_queue(), ^{
+						[d finish:ok ? 1 : 0 error:ok ? nil : [NSString stringWithFormat:@"%@ (LAError %ld)", e.localizedDescription, (long)e.code]];
+					});
+				}];
+			} @catch (NSException *e) {
+				[d.ctx invalidate];
+				[d finish:0 error:[NSString stringWithFormat:@"approval dialog failed: %@", e.reason]];
+			}
 		});
 		if (dispatch_semaphore_wait(d.done, dispatch_time(DISPATCH_TIME_NOW, (int64_t)timeout * NSEC_PER_SEC)) != 0) {
 			dispatch_async(dispatch_get_main_queue(), ^{
@@ -253,7 +260,6 @@ static int ui_ask(const char *json, const char *reason, int timeout, long *ttlIn
 import "C"
 
 import (
-	"encoding/json"
 	"fmt"
 	"time"
 	"unsafe"
@@ -272,19 +278,7 @@ func Ask(p Prompt) (time.Duration, error) {
 	mu.Lock()
 	defer mu.Unlock()
 
-	ui := struct {
-		Prompt
-		// omitempty: a JSON null becomes NSNull, which throws on -count and aborts the daemon.
-		TTLs     []string `json:"ttls,omitempty"`
-		TTLIndex int      `json:"ttl_index"`
-	}{Prompt: p}
-	for i, d := range p.TTLs {
-		ui.TTLs = append(ui.TTLs, FormatDuration(d))
-		if d == p.TTL {
-			ui.TTLIndex = i
-		}
-	}
-	js, err := json.Marshal(ui)
+	js, err := dialogJSON(p)
 	if err != nil {
 		return 0, err
 	}
